@@ -64,11 +64,7 @@ class AudioBox(nn.Module):
         kernel_size: int,
     ):
         super().__init__()
-        # self.to_input = nn.Sequential(
-        #     nn.Linear(audio_dim + self.dynamic_dim, audio_dim * 2),
-        #     nn.ReLU(),
-        #     nn.Linear(audio_dim * 2, audio_dim)
-        # )
+        self.text_dim = text_dim
 
         self.combine = nn.Linear(audio_dim * 2, dim)
         self.conv_embed = ConvPositionEmbed(dim=dim, kernel_size=kernel_size)
@@ -93,16 +89,28 @@ class AudioBox(nn.Module):
             stride=(1, 4, 4),
             padding=0,
         )
-        self.video_to_model_dim = nn.Linear(self.video_latent_dim, audio_dim)
 
-        conv_mult = 4
-        conv_layers = 4
-        self.convnexts = nn.Sequential(
-                *[ConvNeXtV2Block(self.video_latent_dim, self.video_latent_dim * conv_mult) for _ in range(conv_layers)]
-            )
-        self.to_input = nn.Linear(audio_dim + dim, dim)
-        nn.init.zeros_(self.to_input.weight)
-        nn.init.zeros_(self.to_input.bias)
+        # conv_mult = 4
+        # conv_layers = 4
+        # self.convnexts = nn.Sequential(
+        #     *[ConvNeXtV2Block(self.video_latent_dim, self.video_latent_dim * conv_mult) for _ in range(conv_layers)]
+        # )
+        self.video_to_cross_dim = nn.Sequential(
+            nn.Linear(self.video_latent_dim, self.text_dim*4),
+            nn.SiLU(),
+            nn.Linear(self.video_latent_dim*4, self.text_dim),
+        )
+        nn.init.zeros_(self.video_to_cross_dim[-1].weight)
+        nn.init.zeros_(self.video_to_cross_dim[-1].bias)
+
+        conv_mult = 2
+        conv_layers = 2
+        self.convnextssync = nn.Sequential( # 이게 non-linear하니까 ㅇㅋ
+            *[ConvNeXtV2Block(768, 768 * conv_mult) for _ in range(conv_layers)]
+        )
+        self.to_ln = nn.Linear(768, dim)
+        nn.init.zeros_(self.to_ln.weight)
+        nn.init.zeros_(self.to_ln.bias)
     
     def cfg(
         self,
@@ -113,6 +121,7 @@ class AudioBox(nn.Module):
         text_emb: EncTensor,
         text_mask: EncMaskTensor,
         video_latent: EncTensor,
+        sync_latent: EncTensor,
         alpha=0.0,
     ) -> EncTensor:
         w = repeat(w, "b ... -> (r b) ...", r=2)
@@ -125,6 +134,7 @@ class AudioBox(nn.Module):
         text_mask = repeat(text_mask, "b ... -> (r b) ...", r=2)
         
         video_latent = torch.cat((video_latent, torch.zeros_like(video_latent)), dim=0)
+        sync_latent = torch.cat((sync_latent, torch.zeros_like(sync_latent)), dim=0)
 
         logits, null_logits = self(
             w=w,
@@ -134,6 +144,7 @@ class AudioBox(nn.Module):
             text_emb=text_emb,
             text_mask=text_mask,
             video_latent=video_latent,
+            sync_latent=sync_latent
         ).chunk(2, dim=0)
         
         return logits + alpha * (logits - null_logits)
@@ -146,31 +157,29 @@ class AudioBox(nn.Module):
         times: TimeTensor,
         text_emb: EncTensor,
         text_mask: EncMaskTensor,
-        video_latent: EncTensor
+        video_latent: EncTensor,
+        sync_latent: EncTensor
     ) -> EncTensor:
         fvl = self.frame_to_one(video_latent).squeeze()
         fvl = rearrange(fvl, 'b d n -> b n d')
-        fvl = fvl.repeat_interleave(7, dim=1) # [B, 210, 64]
-        fvl = F.pad(fvl, pad=(0, 0, 0, context.shape[1] - fvl.shape[1])) # (C_left, C_right, T_left, T_right)
         fvl = self.convnexts(fvl)
         fvl = self.video_to_model_dim(fvl)
         
         embed = torch.cat((w, context), dim=-1)
         combined = self.combine(embed)
 
-        combined_input = torch.cat((fvl, combined), dim=-1)
-        combined_input = self.to_input(combined_input)
-
-        combined = combined_input + combined
-
         w = self.conv_embed(combined, audio_mask)
+
+        w = w + self.to_ln(self.convnextssync(sync_latent))
 
         time_emb = self.time_emb(times)
         text_emb = self.phoneme_linear(text_emb)
-        text_emb = torch.cat((time_emb, text_emb), dim=1)
-        text_mask = F.pad(text_mask, (1, 0), value=1)
 
-        w = self.transformer(w, mask=audio_mask, key=text_emb, key_mask=text_mask)
+        cross_emb = torch.cat((time_emb, text_emb, fvl), dim=1)
+        text_mask = F.pad(text_mask, (1, fvl.shape[1]), value=1)
+        # text_mask = F.pad(text_mask, (0, ), value=1)
+
+        w = self.transformer(w, mask=audio_mask, key=cross_emb, key_mask=text_mask)
 
         w = self.to_pred(w)
         return w
