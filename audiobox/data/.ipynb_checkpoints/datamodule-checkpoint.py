@@ -1,11 +1,10 @@
 from pathlib import Path
 from typing import Literal
-
 import torch
 from lightning.pytorch import LightningDataModule
 from torch.utils.data import DataLoader, random_split
 
-from data.dataset_0402 import AudioDataset
+from data.dataset_video import AudioDataset
 
 
 class AudioDataModule(LightningDataModule):
@@ -21,6 +20,7 @@ class AudioDataModule(LightningDataModule):
         max_txt_len: int,
         pin_memory: bool = False,
         drop_last: bool = True,
+        max_video_len: int = 31
     ):
         super().__init__()
         self.batch_size = batch_size
@@ -28,6 +28,7 @@ class AudioDataModule(LightningDataModule):
         self.pin_memory = pin_memory
         self.drop_last = drop_last
         self.dataset_path = dataset_path
+        self.max_video_len = max_video_len
         # self.dataset_paths = [path.expanduser() for path in dataset_paths]
 
         self.max_audio_len = max_audio_len
@@ -40,11 +41,12 @@ class AudioDataModule(LightningDataModule):
     def setup(self, stage: str | None = None):
         if self.dataset is None:
             self.dataset = AudioDataset(
-                self.dataset_path,
-                self.max_audio_len,
-                self.sampling_rate,
-                self.max_txt_len,
-                self.channel,
+                dataset_path=self.dataset_path,
+                max_audio_len=self.max_audio_len,
+                max_txt_len=self.max_txt_len,
+                sampling_rate=self.sampling_rate,
+                max_video_len=self.max_video_len,
+                channel=self.channel,
             )
             self.train_dataset, self.val_dataset, self.test_dataset = random_split(
                 self.dataset,

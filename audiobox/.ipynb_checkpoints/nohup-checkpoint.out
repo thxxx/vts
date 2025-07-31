@@ -1,0 +1,7 @@
+Seed set to 42
+
+
+Config : Config(defaults=['_self_', {'audiobox': 'large'}, {'data': 'base'}, {'train': 'base'}], audiobox=AudioBoxBaseConfig(dim=1024, depth=24, heads=16, attn_dropout=0.0, ff_dropout=0.1, kernel_size=31, text_repo_id='google/flan-t5-base'), data=DataConfig(paths=[], max_audio_len=125, max_txt_len=128), train=TrainConfig(acc=2, batch_size=8, base_path='./text_alignment_v3_0414_65000.ckpt', compile=False, early_stop=False, fast_dev_run=False, gradient_clip_val=0.2, lr=0.0001, max_steps=100000, mlflow=True, num_workers=4, optimizer='Adam', resume_path=None, scheduler='linear_warmup_decay', precision='32', project='audiobox-video', tracking_uri='file:mllogs', weight_average=False, max_video_latent_len=30, video_latent_dim=128, video_factor=32, video_resolution=128), voco='oobleck')
+
+
+[2025-07-30 12:25:25,034][httpx][INFO] - HTTP Request: GET https://api.gradio.app/gradio-messaging/en "HTTP/1.1 200 OK"

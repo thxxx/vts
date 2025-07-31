@@ -93,14 +93,14 @@ class AudioBox(nn.Module):
             stride=(1, 4, 4),
             padding=0,
         )
-        self.video_to_model_dim = nn.Linear(self.video_latent_dim, dim)
+        self.video_to_model_dim = nn.Linear(self.video_latent_dim, audio_dim)
 
-        conv_mult = 2
-        conv_layers = 2
+        conv_mult = 4
+        conv_layers = 4
         self.convnexts = nn.Sequential(
-                *[ConvNeXtV2Block(dim, dim * conv_mult) for _ in range(conv_layers)]
+                *[ConvNeXtV2Block(self.video_latent_dim, self.video_latent_dim * conv_mult) for _ in range(conv_layers)]
             )
-        self.to_input = nn.Linear(dim*2, dim)
+        self.to_input = nn.Linear(audio_dim + dim, dim)
         nn.init.zeros_(self.to_input.weight)
         nn.init.zeros_(self.to_input.bias)
     
@@ -116,13 +116,15 @@ class AudioBox(nn.Module):
         alpha=0.0,
     ) -> EncTensor:
         w = repeat(w, "b ... -> (r b) ...", r=2)
-        video_latent = repeat(video_latent, "b ... -> (r b) ...", r=2)
+        # video_latent = repeat(video_latent, "b ... -> (r b) ...", r=2)
         context = repeat(context, "b ... -> (r b) ...", r=2)
         mask = repeat(mask, "b ... -> (r b) ...", r=2)
         times = repeat(times, "b ... -> (r b) ...", r=2)
         
         text_emb = torch.cat((text_emb, torch.zeros_like(text_emb)), dim=0)
         text_mask = repeat(text_mask, "b ... -> (r b) ...", r=2)
+        
+        video_latent = torch.cat((video_latent, torch.zeros_like(video_latent)), dim=0)
 
         logits, null_logits = self(
             w=w,
@@ -133,6 +135,7 @@ class AudioBox(nn.Module):
             text_mask=text_mask,
             video_latent=video_latent,
         ).chunk(2, dim=0)
+        
         return logits + alpha * (logits - null_logits)
     
     def forward(
@@ -145,19 +148,22 @@ class AudioBox(nn.Module):
         text_mask: EncMaskTensor,
         video_latent: EncTensor
     ) -> EncTensor:
+        fvl = self.frame_to_one(video_latent).squeeze()
+        fvl = rearrange(fvl, 'b d n -> b n d')
+        fvl = fvl.repeat_interleave(7, dim=1) # [B, 210, 64]
+        fvl = F.pad(fvl, pad=(0, 0, 0, context.shape[1] - fvl.shape[1])) # (C_left, C_right, T_left, T_right)
+        fvl = self.convnexts(fvl)
+        fvl = self.video_to_model_dim(fvl)
+        
         embed = torch.cat((w, context), dim=-1)
         combined = self.combine(embed)
-
-        fvl = self.frame_to_one(video_latent).sqeeze()
-        fvl = self.video_to_model_dim(fvl)
-        fvl = self.convnexts(fvl)
 
         combined_input = torch.cat((fvl, combined), dim=-1)
         combined_input = self.to_input(combined_input)
 
-        combined_input = combined_input + combined # set residual for stable training
+        combined = combined_input + combined
 
-        w = self.conv_embed(combined_input, audio_mask)
+        w = self.conv_embed(combined, audio_mask)
 
         time_emb = self.time_emb(times)
         text_emb = self.phoneme_linear(text_emb)

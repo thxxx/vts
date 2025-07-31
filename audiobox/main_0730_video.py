@@ -69,7 +69,7 @@ def main(_cfg: DictConfig):
     assert is_bearable(paths, list[Path])
 
     voco = get_voco(cfg.voco)
-    dataset_path = Path("./total_voice_0409.csv")
+    dataset_path = Path("./output_data.csv")
     
     datamodule = AudioDataModule(
         dataset_path=dataset_path,
@@ -97,10 +97,15 @@ def main(_cfg: DictConfig):
         max_steps=cfg.train.max_steps,
         text_repo_id=cfg.audiobox.text_repo_id,
     )
+    def count_parameters(mode):
+        return sum(p.numel() for p in mode.parameters() if p.requires_grad)
+    print(f"Trainable parameters: {count_parameters(model):,}")
 
     if cfg.train.base_path: # 이어서 학습하는 경우
-        state_dict = load_file(cfg.train.base_path)
-        diff_keys = model.audiobox.load_state_dict(state_dict, strict=False)
+        state_dict = torch.load(cfg.train.base_path, map_location="cpu")
+        # state_dict = load_file(cfg.train.base_path)
+        diff_keys = model.load_state_dict(state_dict["state_dict"], strict=False)
+        # diff_keys = model.audiobox.load_state_dict(state_dict["state_dict"], strict=False)
         if diff_keys.unexpected_keys:
             keys = "\n".join(
                 key for key in diff_keys.unexpected_keys if not key.startswith("voco")
@@ -110,6 +115,7 @@ def main(_cfg: DictConfig):
                     f"{len(diff_keys.unexpected_keys)} unexpected keys detected!\n"
                     f"Full list: {keys}"
                 )
+        print("model loaded")
     else:
         print("Warning: missing base path. Are you sure?")
 
@@ -174,7 +180,7 @@ def main(_cfg: DictConfig):
         # mode="min",         # 낮을 수록 좋다.
         auto_insert_metric_name=False,
         save_top_k=-1,           # 모든 체크포인트 저장
-        every_n_train_steps=5000,  # 1000 스텝마다 저장
+        every_n_train_steps=3000,  # 2000 스텝마다 저장
         save_on_train_epoch_end=False,  # 스텝 단위로 저장할 거면 이걸 False로
     )
     callbacks: list[Callback] = [model_checkpoint]
@@ -185,7 +191,7 @@ def main(_cfg: DictConfig):
             EarlyStopping(
                 monitor="train/loss", # 이 metric을 기준으로
                 min_delta=0.00,
-                patience=3,         # 5 epoch 동안 개선이 없으면 스탑
+                patience=5,         # 5 epoch 동안 개선이 없으면 스탑
                 verbose=False,
                 mode="min",
                 strict=False,
@@ -226,10 +232,10 @@ def main(_cfg: DictConfig):
         detect_anomaly=cfg.train.fast_dev_run,
         fast_dev_run=cfg.train.fast_dev_run,
         logger=logger,
-        log_every_n_steps=1000, # original : 10
+        log_every_n_steps=50, # original : 10
         max_steps=cfg.train.max_steps, # default : 1M
-        val_check_interval=0.2,
-        num_sanity_val_steps=5,
+        val_check_interval=1.0,
+        num_sanity_val_steps=3,
         precision=precision,
     )
 
