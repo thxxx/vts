@@ -89,22 +89,22 @@ class AudioBox(nn.Module):
             stride=(1, 4, 4),
             padding=0,
         )
+
+        conv_mult = 4
+        conv_layers = 4
+        self.convnexts = nn.Sequential(
+            *[ConvNeXtV2Block(self.video_latent_dim, self.video_latent_dim * conv_mult) for _ in range(conv_layers)]
+        )
         self.video_to_cross_dim = nn.Linear(self.video_latent_dim, self.text_dim)
         nn.init.zeros_(self.video_to_cross_dim.weight)
         nn.init.zeros_(self.video_to_cross_dim.bias)
 
         conv_mult = 2
         conv_layers = 2
-        self.convnexts = nn.Sequential(
-            *[ConvNeXtV2Block(self.video_latent_dim, self.video_latent_dim * conv_mult) for _ in range(conv_layers)]
-        )
-
-        conv_mult = 2
-        conv_layers = 2
-        self.convnextssync = nn.Sequential(
+        self.convnextssync = nn.Sequential( # 이게 non-linear하니까 ㅇㅋ
             *[ConvNeXtV2Block(768, 768) for _ in range(conv_layers)]
         )
-        self.to_ln = nn.Linear(768, 768)
+        self.to_ln = nn.Linear(768, dim)
         nn.init.zeros_(self.to_ln.weight)
         nn.init.zeros_(self.to_ln.bias)
     
