@@ -110,8 +110,36 @@ def normalize_audio(
     )
     return normalized_audio_enc, audio_mean, audio_std
 
+import base64
+from pathlib import Path
+from typing import List
+from moviepy.editor import VideoFileClip, AudioFileClip
+import tempfile
 
-def write_html(audio_paths: list[Path], image_paths: list[Path], description: str):
+def combine_video_audio(video_path: str, audio_path: str) -> str:
+    video_clip = VideoFileClip(video_path)
+    audio_clip = AudioFileClip(audio_path)
+    
+    # 두 클립 중 짧은 쪽으로 duration 맞추기
+    min_duration = min(video_clip.duration, audio_clip.duration)
+    video_clip = video_clip.subclip(0, min_duration)
+    audio_clip = audio_clip.subclip(0, min_duration)
+
+    final_clip = video_clip.set_audio(audio_clip)
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmpfile:
+        final_clip.write_videofile(
+            tmpfile.name,
+            codec="libx264",
+            audio_codec="aac",
+            verbose=False,
+            logger=None
+        )
+        tmpfile.seek(0)
+        base64_video = base64.b64encode(tmpfile.read()).decode("utf-8")
+    return base64_video
+
+def write_html(audio_paths: List[Path], image_paths: List[Path], description: str, video_path: str = ""):
     html = f"""
     <html>
     <head>
@@ -126,7 +154,6 @@ def write_html(audio_paths: list[Path], image_paths: list[Path], description: st
                 padding: 0;
             }}
             .container {{
-                /* Removed max-width to use full screen width */
                 margin: 0 auto;
                 padding: 20px;
             }}
@@ -142,7 +169,7 @@ def write_html(audio_paths: list[Path], image_paths: list[Path], description: st
             }}
             .grid {{
                 display: grid;
-                grid-template-columns: repeat(2, 1fr); /* Set to 2 columns */
+                grid-template-columns: repeat(2, 1fr);
                 grid-gap: 20px;
             }}
             .card {{
@@ -170,9 +197,14 @@ def write_html(audio_paths: list[Path], image_paths: list[Path], description: st
             img:hover {{
                 transform: scale(1.02);
             }}
+            video {{
+                width: 100%;
+                border-radius: 5px;
+                margin-top: 20px;
+            }}
             @media (max-width: 800px) {{
                 .grid {{
-                    grid-template-columns: 1fr; /* Stack cards on small screens */
+                    grid-template-columns: 1fr;
                 }}
             }}
         </style>
@@ -209,6 +241,22 @@ def write_html(audio_paths: list[Path], image_paths: list[Path], description: st
 
     html += """
             </div>
+    """
+
+    if video_path != "" and audio_paths:
+        print("\n\nmake video \n\n")
+        combined_video_b64 = combine_video_audio(video_path, str(audio_paths[-1]))
+        html += f"""
+            <div class="description">
+                <h2>Combined Video (with audio)</h2>
+                <video controls>
+                    <source src="data:video/mp4;base64,{combined_video_b64}" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>
+            </div>
+        """
+
+    html += """
         </div>
         <!-- Lightbox2 JS -->
         <script src="https://cdnjs.cloudflare.com/ajax/libs/lightbox2/2.11.3/js/lightbox-plus-jquery.min.js"></script>

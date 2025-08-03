@@ -96,9 +96,9 @@ class AudioBox(nn.Module):
         #     *[ConvNeXtV2Block(self.video_latent_dim, self.video_latent_dim * conv_mult) for _ in range(conv_layers)]
         # )
         self.video_to_cross_dim = nn.Sequential(
-            nn.Linear(self.video_latent_dim, self.text_dim*4),
+            nn.Linear(self.video_latent_dim, self.video_latent_dim*4),
             nn.SiLU(),
-            nn.Linear(self.video_latent_dim*4, self.text_dim),
+            nn.Linear(self.video_latent_dim*4, dim),
         )
         nn.init.zeros_(self.video_to_cross_dim[-1].weight)
         nn.init.zeros_(self.video_to_cross_dim[-1].bias)
@@ -162,21 +162,22 @@ class AudioBox(nn.Module):
     ) -> EncTensor:
         fvl = self.frame_to_one(video_latent).squeeze()
         fvl = rearrange(fvl, 'b d n -> b n d')
-        fvl = self.convnexts(fvl)
-        fvl = self.video_to_model_dim(fvl)
+        # fvl = self.convnexts(fvl)
+        fvl = self.video_to_cross_dim(fvl)
         
         embed = torch.cat((w, context), dim=-1)
         combined = self.combine(embed)
 
         w = self.conv_embed(combined, audio_mask)
 
-        w = w + self.to_ln(self.convnextssync(sync_latent))
+        sync_context = self.to_ln(self.convnextssync(sync_latent))
+        w = w + sync_context
 
         time_emb = self.time_emb(times)
         text_emb = self.phoneme_linear(text_emb)
 
         cross_emb = torch.cat((time_emb, text_emb, fvl), dim=1)
-        text_mask = F.pad(text_mask, (1, fvl.shape[1]), value=1)
+        text_mask = F.pad(text_mask, (1, fvl.shape[1]), value=1) # 왼쪽에 1개(for time), 오른쪽에 3fps * seconds개
         # text_mask = F.pad(text_mask, (0, ), value=1)
 
         w = self.transformer(w, mask=audio_mask, key=cross_emb, key_mask=text_mask)

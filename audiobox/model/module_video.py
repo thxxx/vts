@@ -37,6 +37,7 @@ from utils.typing import AudioTensor, EncMaskTensor, EncTensor, LossTensor
 from utils.utils import plot_with_cmap, write_html, get_dynamic
 from utils.sampling_time import sample_lognorm
 from typing import TypeAlias
+from itertools import chain
 
 BatchTuple: TypeAlias = tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]
 
@@ -127,10 +128,11 @@ class AudioBoxModule(LightningModule):
         sync_latent: Tensor,
         alpha=0.0,
     ) -> EncTensor:
-        with torch.autocast(device_type=self.device.type, enabled=False):
-            text_emb = self.t5(
-                input_ids=text, attention_mask=text_mask
-            ).last_hidden_state
+        with torch.no_grad():
+            with torch.autocast(device_type=self.device.type, enabled=False):
+                text_emb = self.t5(
+                    input_ids=text, attention_mask=text_mask
+                ).last_hidden_state
 
         def fn(t: Float[Tensor, "..."], y: Float[Tensor, "..."]):
             out = self.audiobox.cfg(
@@ -205,7 +207,6 @@ class AudioBoxModule(LightningModule):
         alpha=0.0,
     ):
         span_mask = self.get_span_mask(audio_mask)
-        span_mask = torch.ones_like(span_mask)
 
         audio_context = torch.where(rearrange(span_mask, "b l -> b l ()"), 0, audio_enc)
 
@@ -236,13 +237,13 @@ class AudioBoxModule(LightningModule):
                     ).last_hidden_state
 
             # Expand all input tensors to 2B
-            audio_enc = double_batch(audio_enc)
-            span_mask = double_batch(span_mask)
-            audio_mask = double_batch(audio_mask)
-            text_emb = double_batch(text_emb)
-            text_mask = double_batch(text_mask)
-            video_latent = double_batch(video_latent)
-            sync_latent = double_batch(sync_latent)
+            # audio_enc = double_batch(audio_enc)
+            # span_mask = double_batch(span_mask)
+            # audio_mask = double_batch(audio_mask)
+            # text_emb = double_batch(text_emb)
+            # text_mask = double_batch(text_mask)
+            # video_latent = double_batch(video_latent)
+            # sync_latent = double_batch(sync_latent)
             batch = audio_enc.shape[0]
 
             audio_x0 = torch.randn_like(audio_enc)
@@ -272,7 +273,7 @@ class AudioBoxModule(LightningModule):
 
             cond_drop_mask = prob_mask_like((batch, 1), 0.1, self.device)
             sync_latent = torch.where(
-                rearrange(video_drop_mask, "b l -> b l ()"), 0, sync_latent
+                rearrange(cond_drop_mask, "b l -> b l ()"), 0, sync_latent
             )
             
             pred_audio_flow = self.audiobox(
@@ -327,35 +328,9 @@ class AudioBoxModule(LightningModule):
         self, batch: BatchTuple, batch_idx: int
     ):
         self.single_step(batch[:-1], "val")
-        if batch_idx < 4 and self.current_epoch%2==1:
+        if batch_idx < 5 and self.current_epoch%5==4:
             self.log_table(batch, "val", batch_idx)
             # self.validate_generation(batch, batch_idx)
-
-    # def validate_generation(self, batch, idx):
-    #     bdir = '/workspace/AVE_Dataset'
-    #     latent_ids = [
-    #         '-j9TbKCJMwI_126res_24fps',
-    #         '-j9TbKCJMwI_126res_24fps',
-    #     ]
-    #     audio_latents = [
-    #         f'{bdir}/AVE_audio_latent/{lid}.npy' for lid in latent_ids
-    #     ]
-    #     video_latents = [
-    #         f'{bdir}/AVE_latents/{lid}.npy' for lid in latent_ids
-    #     ]
-    #     texts = [
-    #         'dog barking',
-    #         'dog barking',
-    #     ]
-
-    #     audio_enc = torch.from_numpy(np.load(audio_latents[idx])).unsqueeze(dim=0).to(self.device)
-    #     video_latent = torch.from_numpy(np.load(video_latents[idx])).unsqueeze(dim=0).to(self.device)
-
-    #     self.log_table(
-    #         (audio_enc, video_latent, audio_mask, text_embed, text_mask),
-    #         'val',
-    #         idx
-    #     )
         
     def test_step(self, batch: BatchTuple, batch_idx: int):
         self.single_step(batch[:-1], "test")
@@ -377,14 +352,25 @@ class AudioBoxModule(LightningModule):
         random_sync_latent = sync_latent[[random_index]]
         video_path_one = video_path[random_index]
 
+        # without context, soley from text caption
         gen_audio_enc = self.sample(
             audio_enc=torch.zeros_like(random_audio_enc),
             audio_mask=random_audio_mask,
-            text=random_text,
-            text_mask=random_text_mask,
+            text=torch.zeros_like(random_text, dtype=random_text.dtype, device=random_text.device),
+            text_mask=torch.zeros_like(random_text_mask, dtype=random_text_mask.dtype, device=random_text_mask.device),
             video_latent=random_video_latent,
-            alpha=1.0,
+            sync_latent=random_sync_latent,
+            alpha=2.5,
         )
+        # gen_audio_enc = self.sample(
+        #     audio_enc=torch.zeros_like(random_audio_enc),
+        #     audio_mask=random_audio_mask,
+        #     text=random_text,
+        #     text_mask=random_text_mask,
+        #     video_latent=random_video_latent,
+        #     sync_latent=random_sync_latent,
+        #     alpha=1.0,
+        # )
 
         span_mask = self.get_span_mask(random_audio_mask)
 
@@ -396,13 +382,16 @@ class AudioBoxModule(LightningModule):
             mask=random_audio_mask,
             text=random_text,
             text_mask=random_text_mask,
-            video_latent=random_video_latent
+            video_latent=random_video_latent,
+            sync_latent=random_sync_latent,
+            alpha=2.5
         )
         pred_audio_enc = torch.where(
             rearrange(span_mask, "b l -> b l ()"),
             pred_audio_enc,
             random_audio_enc,
         )
+        
         self.log_data(
             random_audio_enc,
             pred_audio_enc,
@@ -508,7 +497,9 @@ class AudioBoxModule(LightningModule):
                     )
                     image_paths.append(image_path)
 
-                html = write_html(audio_paths, image_paths, caption + '  ' + video_path)
+                video_id = video_path.split("/")[-1][:-4][:-len('_224res_24fps')]
+                video_p = f'/workspace/AVE_Videos/AVE_Dataset/AVE_processed/{video_id}_126res_24fps.mp4'
+                html = write_html(audio_paths, image_paths, caption + ' : ' + video_id, video_p)
                 self.logger.experiment.log_text(
                     self.logger.run_id,
                     html,
@@ -520,25 +511,34 @@ class AudioBoxModule(LightningModule):
             case "Adam":
                 optimizer = Adam(self.parameters(), lr=self.lr)
             case "AdamW":
-                optimizer = AdamW(self.parameters(), lr=self.lr, weight_decay=1e-2)
+                # optimizer = AdamW(
+                #     chain(
+                #         self.audiobox.convnextssync.parameters(),
+                #         self.audiobox.to_ln.parameters(),
+                #         self.audiobox.video_to_cross_dim.parameters(),
+                #         self.audiobox.frame_to_one.parameters(),
+                #     ), lr=self.lr, weight_decay=5e-3)
+                optimizer = AdamW(self.parameters(), lr=self.lr, weight_decay=5e-3)
             case _:
                 raise ValueError(f"Unknown optimizer: {self.optim}")
 
         match self.scheduler:
             case "linear_warmup_decay":
+                warmup_iters = int(self.max_steps * 0.1)
+                
                 warmup_scheduler = LinearLR(
-                    optimizer, start_factor=1 / 5000, end_factor=1.0, total_iters=5000
+                    optimizer, start_factor=1/10, end_factor=1.0, total_iters=warmup_iters
                 )
                 decay_scheduler = LinearLR(
                     optimizer,
                     start_factor=1.0,
-                    end_factor=0.0,
-                    total_iters=self.max_steps,
+                    end_factor=1/10,
+                    total_iters=self.max_steps - warmup_iters,
                 )
                 scheduler = SequentialLR(
                     optimizer,
                     schedulers=[warmup_scheduler, decay_scheduler],
-                    milestones=[5000],
+                    milestones=[warmup_iters],
                 )
             case _:
                 raise ValueError(f"Unknown scheduler: {self.scheduler}")

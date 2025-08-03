@@ -13,6 +13,7 @@ from transformers import AutoTokenizer
 import os
 import re
 import torch.nn.functional as F
+from einops import rearrange
 
 def get_npy_filename(path: str, duration: float) -> str:
     base_name = '.'.join(path.split('.')[:-1])
@@ -92,7 +93,9 @@ class AudioDataset(Dataset):
         # C, T, W, H
         sync_latent = np.load(sync_latent_path, mmap_mode='r')
         sync_latent = torch.from_numpy(sync_latent.copy())
-        sync_latent = F.interpolate(sync_latent, size=latent_len, mode='nearest-exact')
+        sync_latent = rearrange(sync_latent, 'l d -> 1 d l')
+        sync_latent = F.interpolate(sync_latent, size=latent_len, mode='nearest-exact').squeeze()
+        sync_latent = rearrange(sync_latent, 'd l -> l d')
         
         # compile을  안쓴다면 같은 배치 안의 최대 길이로 하는게 낫긴하지?
         if latent_len < self.max_latent_len:

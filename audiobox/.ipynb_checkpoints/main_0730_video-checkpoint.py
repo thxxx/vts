@@ -129,6 +129,7 @@ def main(_cfg: DictConfig):
         ),
         torch.ones(cfg.train.batch_size, cfg.data.max_txt_len, dtype=torch.bool), # text attention mask
         torch.randn(cfg.train.batch_size, cfg.train.video_latent_dim, cfg.train.max_video_latent_len, cfg.train.video_resolution//cfg.train.video_factor, cfg.train.video_resolution//cfg.train.video_factor), # video condition
+        torch.randn((cfg.train.batch_size, 184, 768)), # sync attention mask
     )
 
     # 로깅방식
@@ -180,7 +181,7 @@ def main(_cfg: DictConfig):
         # mode="min",         # 낮을 수록 좋다.
         auto_insert_metric_name=False,
         save_top_k=-1,           # 모든 체크포인트 저장
-        every_n_train_steps=3000,  # 2000 스텝마다 저장
+        every_n_train_steps=2000,  # 2000 스텝마다 저장
         save_on_train_epoch_end=False,  # 스텝 단위로 저장할 거면 이걸 False로
     )
     callbacks: list[Callback] = [model_checkpoint]
@@ -191,7 +192,7 @@ def main(_cfg: DictConfig):
             EarlyStopping(
                 monitor="train/loss", # 이 metric을 기준으로
                 min_delta=0.00,
-                patience=5,         # 5 epoch 동안 개선이 없으면 스탑
+                patience=10,         # 5 epoch 동안 개선이 없으면 스탑
                 verbose=False,
                 mode="min",
                 strict=False,
@@ -225,7 +226,9 @@ def main(_cfg: DictConfig):
     assert precision == "16-mixed" or precision == "32" or precision == "bf16-mixed"
 
     trainer = Trainer(
-        strategy="ddp",
+        accelerator="gpu",
+        devices=1,
+        # strategy="ddp",
         accumulate_grad_batches=cfg.train.acc,
         gradient_clip_val=cfg.train.gradient_clip_val,
         callbacks=callbacks,
@@ -240,6 +243,7 @@ def main(_cfg: DictConfig):
     )
 
     trainer.fit(model=model, datamodule=datamodule, ckpt_path=cfg.train.resume_path)
+    print("\n\n\n 학습 종료 \n\n\n")
 
     if checkpoint_dir is None:
         save_path = "model.ckpt"

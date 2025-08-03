@@ -12,6 +12,8 @@ from torch.utils.data import Dataset
 from transformers import AutoTokenizer
 import os
 import re
+import torch.nn.functional as F
+from einops import rearrange
 
 def get_npy_filename(path: str, duration: float) -> str:
     base_name = '.'.join(path.split('.')[:-1])
@@ -63,7 +65,7 @@ class AudioDataset(Dataset):
         with open(dataset_path, "r", newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                self.paths.append((row["audio_path"], row['video_latent_path'], row["caption"], row['duration']))
+                self.paths.append((row["audio_path"], row['video_latent_path'], row["caption"], row['duration'], row['sync_latent_path']))
 
         self.tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
         self.tokenizer.padding_side = "right"
@@ -76,13 +78,7 @@ class AudioDataset(Dataset):
         self.max_video_len = max_video_len
 
     def __getitem__(self, index: int):
-        audio_path, video_path, desc, duration = self.paths[index]
-        # audio_wavpath = re.sub("/data/", "/", audio_path)
-
-        # waveform, sr = torchaudio.load(audio_path)
-        # if sr != self.sampling_rate:
-        #     waveform = torchaudio.functional.resample(waveform, sr, self.sampling_rate)
-        # waveform = waveform.mean(dim=0, keepdim=True)
+        audio_path, video_path, desc, duration, sync_latent_path = self.paths[index]
 
         path = audio_path
         # path = get_npy_filename(audio_path, float(duration))
@@ -94,12 +90,21 @@ class AudioDataset(Dataset):
             latent = np.load(path, mmap_mode="r") # N, D
             latent_len = len(latent)
         
+        # C, T, W, H
+        sync_latent = np.load(sync_latent_path, mmap_mode='r')
+        sync_latent = torch.from_numpy(sync_latent.copy())
+        sync_latent = rearrange(sync_latent, 'l d -> 1 d l')
+        sync_latent = F.interpolate(sync_latent, size=latent_len, mode='nearest-exact').squeeze()
+        sync_latent = rearrange(sync_latent, 'd l -> l d')
+        
         # compile을  안쓴다면 같은 배치 안의 최대 길이로 하는게 낫긴하지?
         if latent_len < self.max_latent_len:
             latent = np.pad(latent, ((0, self.max_latent_len - latent_len), (0, 0)))
+            sync_latent = F.pad(sync_latent, (0, 0, 0, self.max_latent_len - latent_len))
         elif self.max_latent_len < latent_len:
             random_start = self.rng.integers(latent_len - self.max_latent_len)
             latent = latent[random_start : random_start + self.max_latent_len]
+            sync_latent = sync_latent[random_start : random_start + self.max_latent_len]
             latent_len = self.max_latent_len
         
         # C, T, W, H
@@ -115,13 +120,14 @@ class AudioDataset(Dataset):
         elif self.max_video_len < video_len:
             video_latent = video_latent[:, :self.max_video_len, :, :]
             video_len = self.max_video_len
+
         
         # 원래 latent 길이 ~ max_latent 길이까지는 패딩임을 알려준다.
         audio_mask = torch.arange(self.max_latent_len) < latent_len
         latents = torch.from_numpy(latent.copy())
         video_latents = torch.from_numpy(video_latent.copy())
 
-        return latents, video_latents, audio_mask, desc, duration, video_path
+        return latents, video_latents, audio_mask, desc, duration, video_path, sync_latent
 
     def __len__(self):
         return len(self.paths)
@@ -143,7 +149,7 @@ class AudioDataset(Dataset):
             else:
                 self.logger.info("%d is a dud", random_indice)
 
-        audio_embed, video_latents, audio_masks, descs, durations, video_path = zip(*filter_batches)
+        audio_embed, video_latents, audio_masks, descs, durations, video_path, sync_latent = zip(*filter_batches)
         # audio_embed, audio_masks, descs = zip(*filter_batches)
 
         batch_encoding = self.tokenizer(
@@ -158,4 +164,4 @@ class AudioDataset(Dataset):
         attention_mask = batch_encoding.attention_mask > 0
 
         # print('durations : ', max(durations)) # 대충 9.9초?
-        return torch.stack(audio_embed), torch.stack(video_latents), torch.stack(audio_masks), input_ids, attention_mask, video_path
+        return torch.stack(audio_embed), torch.stack(video_latents), torch.stack(sync_latent), torch.stack(audio_masks), input_ids, attention_mask, video_path
