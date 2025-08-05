@@ -51,7 +51,7 @@ def process_all_videos(files, dir_path, pro_path):
         list(tqdm(pool.imap_unordered(process_video_wrapper, args_list), total=len(args_list)))
 
 print(f"Video processing 시작 : {res} resolution, {fps} fps, first {seconds} seconds")
-# process_all_videos(files, original_video_path, processed_video_path)
+process_all_videos(files, original_video_path, processed_video_path)
 
 import ffmpeg
 

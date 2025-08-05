@@ -5,7 +5,7 @@ from dataclasses import dataclass
 class TrainConfig:
     acc: int = 1
     batch_size: int = 32
-    base_path: str = "./text_alignment_v3_0414_65000.ckpt"
+    base_path: str = "./new-stage-2.ckpt"
     compile: bool = False
     early_stop: bool = False
     fast_dev_run: bool = False
@@ -21,10 +21,10 @@ class TrainConfig:
     scheduler: str = "linear_warmup_decay"
     # precision: str = "16-mixed"
     precision: str = "32"
-    project: str = "audiobox-video-freeze"
+    project: str = "audiobox-video-clips"
     tracking_uri: str = "file:mllogs"
     weight_average: bool = False
-    max_video_latent_len:int = 24
-    video_latent_dim:int = 128
+    max_video_latent_len:int = 64
+    video_latent_dim:int = 1280
     video_factor:int = 32
     video_resolution:int = 128

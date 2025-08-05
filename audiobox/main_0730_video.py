@@ -69,7 +69,7 @@ def main(_cfg: DictConfig):
     assert is_bearable(paths, list[Path])
 
     voco = get_voco(cfg.voco)
-    dataset_path = Path("./output_data.csv")
+    dataset_path = Path("./output_data_clips.csv")
     
     datamodule = AudioDataModule(
         dataset_path=dataset_path,
@@ -128,7 +128,8 @@ def main(_cfg: DictConfig):
             0, model.t5.config.vocab_size, (cfg.train.batch_size, cfg.data.max_txt_len) # text input ids
         ),
         torch.ones(cfg.train.batch_size, cfg.data.max_txt_len, dtype=torch.bool), # text attention mask
-        torch.randn(cfg.train.batch_size, cfg.train.video_latent_dim, cfg.train.max_video_latent_len, cfg.train.video_resolution//cfg.train.video_factor, cfg.train.video_resolution//cfg.train.video_factor), # video condition
+        torch.randn(cfg.train.batch_size, cfg.train.max_video_latent_len, cfg.train.video_latent_dim), # video condition
+        # torch.randn(cfg.train.batch_size, cfg.train.video_latent_dim, cfg.train.max_video_latent_len, cfg.train.video_resolution//cfg.train.video_factor, cfg.train.video_resolution//cfg.train.video_factor), # video condition
         torch.randn((cfg.train.batch_size, 184, 768)), # sync attention mask
     )
 

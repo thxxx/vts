@@ -37,7 +37,7 @@ class AudioDataset(Dataset):
         max_audio_len: int,
         max_txt_len: int,
         sampling_rate: int = 44100,
-        max_video_len: int = 31,
+        max_video_len: int = 64,
         channel: Literal[1, 2] = 2,
     ):
         super().__init__()
@@ -108,26 +108,26 @@ class AudioDataset(Dataset):
             latent_len = self.max_latent_len
         
         # C, T, W, H
-        video_latent = np.load(video_path, mmap_mode='r')
-        video_latent = video_latent[:, :30, :, :]
-        try:
-            video_len = video_latent.shape[1]
-        except:
-            print(" video_latent : ", video_latent.shape)
-
+        video_latent = torch.load(video_path)
+        # video_latent = np.load(video_path, mmap_mode='r')
+        video_latent = video_latent[:8*8, :]
+        video_len = video_latent.shape[0]
+        
         if video_len < self.max_video_len:
-            video_latent = np.pad(video_latent, ((0,0), (0,self.max_video_len - video_len), (0,0), (0,0)))
+            pad_len = self.max_video_len - video_len
+            # video_latent = np.pad(video_latent, ((0,0), (0, pad_len), (0,0), (0,0)))
+            video_latent = F.pad(video_latent, (0, 0, 0, 0, 0, pad_len))  # (W, H, T 방향으로 패딩)
         elif self.max_video_len < video_len:
-            video_latent = video_latent[:, :self.max_video_len, :, :]
+            video_latent = video_latent[:self.max_video_len, :]
             video_len = self.max_video_len
 
         
         # 원래 latent 길이 ~ max_latent 길이까지는 패딩임을 알려준다.
         audio_mask = torch.arange(self.max_latent_len) < latent_len
         latents = torch.from_numpy(latent.copy())
-        video_latents = torch.from_numpy(video_latent.copy())
+        # video_latents = torch.from_numpy(video_latent.copy())
 
-        return latents, video_latents, audio_mask, desc, duration, video_path, sync_latent
+        return latents, video_latent, audio_mask, desc, duration, video_path, sync_latent
 
     def __len__(self):
         return len(self.paths)

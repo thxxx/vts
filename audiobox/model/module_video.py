@@ -268,7 +268,7 @@ class AudioBoxModule(LightningModule):
 
             video_drop_mask = prob_mask_like((batch, ), 0.1, self.device)
             video_latent = torch.where(
-                rearrange(video_drop_mask, "b -> b () () () ()"), 0, video_latent
+                rearrange(video_drop_mask, "b -> b () ()"), 0, video_latent
             )
 
             cond_drop_mask = prob_mask_like((batch, 1), 0.1, self.device)
@@ -498,7 +498,7 @@ class AudioBoxModule(LightningModule):
                     image_paths.append(image_path)
 
                 video_id = video_path.split("/")[-1][:-4][:-len('_224res_24fps')]
-                video_p = f'/workspace/AVE_Videos/AVE_Dataset/AVE_processed/{video_id}_126res_24fps.mp4'
+                video_p = f'/workspace/AVE_Dataset/AVE/{video_id}.mp4'
                 html = write_html(audio_paths, image_paths, caption + ' : ' + video_id, video_p)
                 self.logger.experiment.log_text(
                     self.logger.run_id,

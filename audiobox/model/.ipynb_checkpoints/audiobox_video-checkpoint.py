@@ -50,6 +50,18 @@ class TimeEncoding(nn.Module):
         fouriered = torch.cat((freqs.sin(), freqs.cos()), dim=-1)
         return rearrange(fouriered, "b d -> b () d")
 
+class SinusoidalPosEmb(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, n: int, device='cpu'):
+        position = torch.arange(n, dtype=torch.float32, device=device).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, self.dim, 2, device=device).float() * (-math.log(10000.0) / self.dim))
+        pe = torch.zeros(n, self.dim, device=device)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe  # (N, dim)
 
 class AudioBox(nn.Module):
     def __init__(
@@ -81,24 +93,25 @@ class AudioBox(nn.Module):
 
         self.to_pred = nn.Linear(dim, audio_dim, bias=False)
 
-        self.video_latent_dim = 128
-        self.frame_to_one = nn.Conv3d(
-            in_channels=self.video_latent_dim,
-            out_channels=self.video_latent_dim,
-            kernel_size=(1, 4, 4),
-            stride=(1, 4, 4),
-            padding=0,
-        )
-
-        # conv_mult = 4
-        # conv_layers = 4
-        # self.convnexts = nn.Sequential(
-        #     *[ConvNeXtV2Block(self.video_latent_dim, self.video_latent_dim * conv_mult) for _ in range(conv_layers)]
+        self.video_latent_dim = 1280
+        # self.frame_to_one = nn.Conv3d(
+        #     in_channels=self.video_latent_dim,
+        #     out_channels=self.video_latent_dim,
+        #     kernel_size=(1, 4, 4),
+        #     stride=(1, 4, 4),
+        #     padding=0,
         # )
+
+        conv_mult = 2
+        conv_layers = 2
+        self.convnexts = nn.Sequential(
+            *[ConvNeXtV2Block(self.video_latent_dim, self.video_latent_dim * conv_mult) for _ in range(conv_layers)]
+        )
+        
         self.video_to_cross_dim = nn.Sequential(
-            nn.Linear(self.video_latent_dim, self.video_latent_dim*4),
-            nn.SiLU(),
-            nn.Linear(self.video_latent_dim*4, dim),
+            # nn.Linear(self.video_latent_dim, self.video_latent_dim*4),
+            # nn.SiLU(),
+            nn.Linear(self.video_latent_dim, dim),
         )
         nn.init.zeros_(self.video_to_cross_dim[-1].weight)
         nn.init.zeros_(self.video_to_cross_dim[-1].bias)
@@ -108,9 +121,21 @@ class AudioBox(nn.Module):
         self.convnextssync = nn.Sequential( # 이게 non-linear하니까 ㅇㅋ
             *[ConvNeXtV2Block(768, 768 * conv_mult) for _ in range(conv_layers)]
         )
-        self.to_ln = nn.Linear(768, dim)
+        # self.to_ln = nn.Linear(768 + dim, dim)
+        # nn.init.zeros_(self.to_ln.weight)
+        # nn.init.zeros_(self.to_ln.bias)
+
+        self.to_ln = nn.Linear(768 + dim, dim)
+
+        # 전체 weight 0으로 초기화
         nn.init.zeros_(self.to_ln.weight)
         nn.init.zeros_(self.to_ln.bias)
+        
+        # 뒤쪽 dim 부분을 identity로 설정
+        with torch.no_grad():
+            self.to_ln.weight[:, 768:] = torch.eye(dim)
+
+        self.video_pos_emb = SinusoidalPosEmb(dim)
     
     def cfg(
         self,
@@ -160,18 +185,22 @@ class AudioBox(nn.Module):
         video_latent: EncTensor,
         sync_latent: EncTensor
     ) -> EncTensor:
-        fvl = self.frame_to_one(video_latent).squeeze()
-        fvl = rearrange(fvl, 'b d n -> b n d')
-        # fvl = self.convnexts(fvl)
+        fvl = self.convnexts(video_latent) # B N D
         fvl = self.video_to_cross_dim(fvl)
+        
+        pe = self.video_pos_emb(n=video_latent.shape[1], device=video_latent.device)  # (N, dim)
+        pe = pe.unsqueeze(0).expand(video_latent.size(0), -1, -1)  # (B, N, dim)
+        fvl = fvl + pe  # (B, N, dim)
         
         embed = torch.cat((w, context), dim=-1)
         combined = self.combine(embed)
 
         w = self.conv_embed(combined, audio_mask)
 
-        sync_context = self.to_ln(self.convnextssync(sync_latent))
-        w = w + sync_context
+        sync_context = self.convnextssync(sync_latent)
+        sync_context = torch.cat((sync_context, w), dim=-1)
+        w = self.to_ln(sync_context)
+        # w = w + sync_context
 
         time_emb = self.time_emb(times)
         text_emb = self.phoneme_linear(text_emb)

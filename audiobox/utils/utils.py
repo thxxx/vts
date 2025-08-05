@@ -6,6 +6,7 @@ from pathlib import Path
 import torchaudio
 import librosa
 import random
+import os
 
 import numpy as np
 import torch
@@ -243,7 +244,7 @@ def write_html(audio_paths: List[Path], image_paths: List[Path], description: st
             </div>
     """
 
-    if video_path != "" and audio_paths:
+    if video_path != "" and audio_paths and os.path.exists(video_path):
         print("\n\nmake video \n\n")
         combined_video_b64 = combine_video_audio(video_path, str(audio_paths[-1]))
         html += f"""
