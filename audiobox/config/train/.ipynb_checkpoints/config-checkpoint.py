@@ -3,16 +3,16 @@ from dataclasses import dataclass
 
 @dataclass
 class TrainConfig:
-    acc: int = 1
+    acc: int = 2
     batch_size: int = 32
-    base_path: str = "./new-stage-2.ckpt"
+    base_path: str = "/workspace/new-stage-2.ckpt"
     compile: bool = False
     early_stop: bool = False
     fast_dev_run: bool = False
     gradient_clip_val: float = 0.2
-    lr: float = 1e-5
+    lr: float = 5e-6
     # lr: float = 2e-5
-    max_steps: int = 50000
+    max_steps: int = 40000
     # max_steps: int = 100000
     mlflow: bool = True
     num_workers: int = 4

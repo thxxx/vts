@@ -524,7 +524,7 @@ class AudioBoxModule(LightningModule):
 
         match self.scheduler:
             case "linear_warmup_decay":
-                warmup_iters = int(self.max_steps * 0.1)
+                warmup_iters = int(self.max_steps * 0.05)
                 
                 warmup_scheduler = LinearLR(
                     optimizer, start_factor=1/10, end_factor=1.0, total_iters=warmup_iters

@@ -63,6 +63,22 @@ class SinusoidalPosEmb(nn.Module):
         pe[:, 1::2] = torch.cos(position * div_term)
         return pe  # (N, dim)
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class GatedLinearProjection(nn.Module):
+    def __init__(self, in_dim: int, out_dim: int):
+        super().__init__()
+        self.value_proj = nn.Linear(in_dim, out_dim)
+        self.gate_proj = nn.Linear(in_dim, out_dim)
+    
+    def forward(self, x):
+        # x: (B, T, in_dim)
+        value = self.value_proj(x)       # (B, T, out_dim)
+        gate = torch.sigmoid(self.gate_proj(x))  # (B, T, out_dim)
+        return value * gate
+
 class AudioBox(nn.Module):
     def __init__(
         self,
@@ -94,6 +110,8 @@ class AudioBox(nn.Module):
         self.to_pred = nn.Linear(dim, audio_dim, bias=False)
 
         self.video_latent_dim = 1280
+        self.sync_latent_dim = 768
+        
         # self.frame_to_one = nn.Conv3d(
         #     in_channels=self.video_latent_dim,
         #     out_channels=self.video_latent_dim,
@@ -108,34 +126,38 @@ class AudioBox(nn.Module):
             *[ConvNeXtV2Block(self.video_latent_dim, self.video_latent_dim * conv_mult) for _ in range(conv_layers)]
         )
         
-        self.video_to_cross_dim = nn.Sequential(
-            # nn.Linear(self.video_latent_dim, self.video_latent_dim*4),
-            # nn.SiLU(),
-            nn.Linear(self.video_latent_dim, dim),
-        )
-        nn.init.zeros_(self.video_to_cross_dim[-1].weight)
-        nn.init.zeros_(self.video_to_cross_dim[-1].bias)
+        # self.video_to_cross_dim = nn.Sequential(
+        #     # nn.Linear(self.video_latent_dim, self.video_latent_dim*4),
+        #     # nn.SiLU(),
+        #     nn.Linear(self.video_latent_dim, dim),
+        # )
+        # nn.init.zeros_(self.video_to_cross_dim[-1].weight)
+        # nn.init.zeros_(self.video_to_cross_dim[-1].bias)
 
-        conv_mult = 2
+        conv_mult = 1
         conv_layers = 2
         self.convnextssync = nn.Sequential( # 이게 non-linear하니까 ㅇㅋ
-            *[ConvNeXtV2Block(768, 768 * conv_mult) for _ in range(conv_layers)]
+            *[ConvNeXtV2Block(self.sync_latent_dim, self.sync_latent_dim * conv_mult) for _ in range(conv_layers)]
         )
         # self.to_ln = nn.Linear(768 + dim, dim)
         # nn.init.zeros_(self.to_ln.weight)
         # nn.init.zeros_(self.to_ln.bias)
 
-        self.to_ln = nn.Linear(768 + dim, dim)
+        # self.to_ln = nn.Linear(self.video_latent_dim + dim, dim, bias=False)
 
         # 전체 weight 0으로 초기화
-        nn.init.zeros_(self.to_ln.weight)
-        nn.init.zeros_(self.to_ln.bias)
-        
+        # nn.init.zeros_(self.to_ln.weight)
         # 뒤쪽 dim 부분을 identity로 설정
-        with torch.no_grad():
-            self.to_ln.weight[:, 768:] = torch.eye(dim)
+        # with torch.no_grad():
+        #     self.to_ln.weight[:, self.video_latent_dim:] = torch.eye(dim)
 
-        self.video_pos_emb = SinusoidalPosEmb(dim)
+        self.video_pos_emb = SinusoidalPosEmb(self.video_latent_dim)
+        self.video_proj = GatedLinearProjection(dim, dim)
+        self.to_clip = nn.Sequential(
+            nn.Linear(self.sync_latent_dim + self.video_latent_dim, dim),
+            nn.SiLU(),
+            nn.Linear(dim, dim)
+        )
     
     def cfg(
         self,
@@ -185,29 +207,42 @@ class AudioBox(nn.Module):
         video_latent: EncTensor,
         sync_latent: EncTensor
     ) -> EncTensor:
-        fvl = self.convnexts(video_latent) # B N D
-        fvl = self.video_to_cross_dim(fvl)
+        # print(w.shape, context.shape, video_latent.shape, sync_latent.shape, "\n\n")
+        clip_features = self.convnexts(video_latent) # B N D
+
+        clip_features = rearrange(clip_features, 'b n d -> b d n')
+        clip_features = F.interpolate(clip_features, size=w.shape[1], mode='nearest-exact') # 8*seconds -> 21.5*seconds
+        clip_features = rearrange(clip_features, 'b d n -> b n d')
+        # clip_features = self.video_to_cross_dim(clip_features)
         
-        pe = self.video_pos_emb(n=video_latent.shape[1], device=video_latent.device)  # (N, dim)
-        pe = pe.unsqueeze(0).expand(video_latent.size(0), -1, -1)  # (B, N, dim)
-        fvl = fvl + pe  # (B, N, dim)
-        
+        pe = self.video_pos_emb(n=clip_features.shape[1], device=clip_features.device)  # (N, dim)
+        pe = pe.unsqueeze(0).expand(clip_features.size(0), -1, -1)  # (B, N, dim)
+        clip_features = clip_features + pe  # (B, N, dim)
+                
         embed = torch.cat((w, context), dim=-1)
         combined = self.combine(embed)
-
         w = self.conv_embed(combined, audio_mask)
 
         sync_context = self.convnextssync(sync_latent)
-        sync_context = torch.cat((sync_context, w), dim=-1)
-        w = self.to_ln(sync_context)
+
+        clip_features = torch.cat((clip_features, sync_context), dim=-1)
+        clip_features = self.to_clip(clip_features)
+        
+        video_cond = self.video_proj(clip_features)  # (B, T, D)
+        w = w + video_cond
+        # combined_context = torch.cat((clip_features, w), dim=-1)
+        # w = self.to_ln(combined_context)
         # w = w + sync_context
 
         time_emb = self.time_emb(times)
         text_emb = self.phoneme_linear(text_emb)
 
-        cross_emb = torch.cat((time_emb, text_emb, fvl), dim=1)
-        text_mask = F.pad(text_mask, (1, fvl.shape[1]), value=1) # 왼쪽에 1개(for time), 오른쪽에 3fps * seconds개
+        # cross_emb = torch.cat((time_emb, text_emb, fvl), dim=1)
+        # text_mask = F.pad(text_mask, (1, fvl.shape[1]), value=1) # 왼쪽에 1개(for time), 오른쪽에 3fps * seconds개
         # text_mask = F.pad(text_mask, (0, ), value=1)
+        
+        cross_emb = torch.cat((time_emb, text_emb), dim=1)
+        text_mask = F.pad(text_mask, (1, 0), value=1) # 왼쪽에 1개(for time), 오른쪽에 3fps * seconds개
 
         w = self.transformer(w, mask=audio_mask, key=cross_emb, key_mask=text_mask)
 

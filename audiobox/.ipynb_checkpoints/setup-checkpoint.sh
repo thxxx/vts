@@ -10,3 +10,6 @@ pip uninstall -y torchvision
 pip install torchvision --no-cache-dir
 pip install ffmpeg-python
 pip install numpy==2.0.0
+
+git config --global user.email zxcv05999@naver.com
+git config --global user.name thxxx
